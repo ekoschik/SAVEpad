@@ -9,10 +9,23 @@
 
 
 const char g_szClassName[] = "myWindowClass";
-const int ID_TIMER = 1;
 
 const char CleanMsg[] = "clean";
 const char DirtyMsg[] = "dirty";
+
+const UINT TIMERGRANULARITY = 15;   //miliseconds between timer ticks
+const UINT DIRTYTHRESHOLD = 15;     //number of timer ticks without changes before saving
+const int ID_TIMER = 1;             
+
+
+const int DEFFONTSIZE = 20;
+const int MAXFONTSIZE = 100;
+const int MINFONTSIZE = 10;
+
+const int NOFILE_BOARDER_SIZE = 10;
+
+BOOL statusarea;
+const int STATUSAREAHEIGHT = 70;
 
 LPSTR backup;
 DWORD backupsize;
@@ -25,27 +38,29 @@ HWND hTool;
 HWND hEdit;
 
 char filename[MAX_PATH];
+char foldername[MAX_PATH];
 BOOL fileopen;
 BOOL filedirty;
 
 UINT dirtycount;
-const UINT dirtythreshold = 15;
 
 void DoFileSave(HWND hwnd, BOOL forcesave);
 void DoFileOpen(HWND hwnd, LPCTSTR szFileName);
 
-const int deffontsize = 20;
-const int max_fontsize = 100;
-const int min_fontsize = 10;
 int fontsize;
 VOID SetFont(HWND hwnd, int step)
 {
-    //hacktastic.  fix me
+    //fix me
     if (step == 545) step = -1;
 
-    //change font size
     int prevfontsize = fontsize;
-    fontsize = min(max(fontsize + step, min_fontsize), max_fontsize);
+
+    if (step == 0) { //condition when setting the initial font
+        prevfontsize = 0;
+        fontsize = DEFFONTSIZE;
+    }
+    else
+        fontsize = min(max(fontsize + step, MINFONTSIZE), MAXFONTSIZE);
     
     if (prevfontsize != fontsize) 
     {
@@ -57,7 +72,35 @@ VOID SetFont(HWND hwnd, int step)
         //send WM_SETFONT
         HFONT hf = CreateFont(fontsize, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "Times New Roman");
         SendMessage(hEdit, WM_SETFONT, (WPARAM)hf, MAKELPARAM(TRUE, 0));
+        SendMessage(hwnd, WM_SETFONT, (WPARAM)hf, MAKELPARAM(TRUE, 0));
+
     }
+}
+
+VOID RePositionChildren(HWND hwnd)
+{
+    // Get height of status bar
+    RECT rcStatus;
+    SendMessage(hStatus, WM_SIZE, 0, 0); //why?
+    GetWindowRect(hStatus, &rcStatus);
+    int iStatusHeight = rcStatus.bottom - rcStatus.top;
+
+    //Size of red boarder to show no file is open
+    int boardersize = fileopen ? 0 : NOFILE_BOARDER_SIZE;
+
+    int statusAreaHeight = statusarea && fileopen ? STATUSAREAHEIGHT : 0;
+    
+    // Set size of edit window
+    RECT rcClient;
+    GetClientRect(hwnd, &rcClient);
+    int iEditHeight = rcClient.bottom - iStatusHeight;
+    SetWindowPos(hEdit,
+                 NULL,
+                 boardersize,
+                 boardersize + statusAreaHeight,
+                 rcClient.right - 2 * boardersize,
+                 iEditHeight - 2 * boardersize,
+                 SWP_NOZORDER);
 }
 
 VOID Revert(HWND hwnd)
@@ -79,6 +122,11 @@ VOID SaveFileName(HWND hwnd, LPCTSTR szFileName)
     SetWindowText(hwnd, wintitle);
     GlobalFree(wintitle);
 
+
+    //create folder name
+        //BEFORE "C:\Users\evkoschi\Desktop\tmp.txt"
+        //AFTR   "C:\\Users\\evkoschi\\Desktop"
+    //ex: double backslashed, and take of everything after and including last slash
 }
 
 BOOL LoadTextFile(HWND hEdit, LPCTSTR pszFileName)
@@ -167,6 +215,8 @@ void DoFileOpen(HWND hwnd, LPSTR filepath)
         SaveFileName(hwnd, filepath);
     }
 
+    RePositionChildren(hwnd);
+    UpdateWindow(hwnd);
 }
 
 BOOL SaveTextFile(HWND hEdit, LPCTSTR pszFileName)
@@ -292,7 +342,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,
         if(hEdit == NULL)
             MessageBox(hwnd, "Could not create edit box.", "Error", MB_OK | MB_ICONERROR);
     
-        SetFont(hwnd, deffontsize);
+        SetFont(hwnd, 0);
         
         // Create Status bar
         hStatus = CreateWindowEx(
@@ -310,7 +360,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,
         
         if (cmdlinearg_path_set) {
 
-            //when opening a txt file using savepad, windows adds quotes
+            //remove quotes from the file path
             if (cmdlinearg_path[0] == '"') {
                 int len = strlen(cmdlinearg_path);
                 memcpy(cmdlinearg_path, cmdlinearg_path + 1, len - 2);
@@ -319,38 +369,45 @@ LRESULT CALLBACK WndProc(HWND hwnd,
 
             DoFileOpen(hwnd, (LPSTR)cmdlinearg_path);
         }
-        else
-        {
-            DoFileOpen(hwnd, (LPSTR)0);
-        }
+
+        ShellExecute(hwnd, "open", NULL, NULL, "C:\Users\evkoschi\Desktop", SW_SHOWNORMAL);
 
         break; 
     }
 
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        if (!fileopen) 
+        {
+            RECT rcClient;
+            GetClientRect(hwnd, &rcClient);
+            FillRect(hdc, &rcClient, CreateSolidBrush(RGB(255, 0, 0)));
+            
+        }
+        
+        else if (statusarea)
+        {
+            RECT rcClient;
+            GetClientRect(hwnd, &rcClient);
+
+            RECT rcStatusArea = { 0, 0, rcClient.right, STATUSAREAHEIGHT };
+//            FillRect(hdc, &rcClient, CreateSolidBrush(RGB(0, 0, 255)));
+
+
+            RECT rc = {30,30,150,150};
+            DrawText(hdc, "This is some text.", 18, &rc, DT_LEFT | DT_EDITCONTROL);
+        }
+
+        EndPaint(hwnd, &ps);
+        
+        break;
+    }
     case WM_SIZE:
     {
-        //Broadcast New Window Size
-        RECT rcWindow;
-        GetWindowRect(hwnd, &rcWindow);
-        char windowSizeBroadcast[200];
-        sprintf(windowSizeBroadcast, "New Window Rect: [ %d, %d, %d, %d ]",
-            rcWindow.top, rcWindow.left, rcWindow.right, rcWindow.bottom);
-        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)windowSizeBroadcast);
-
-        // Size status bar and get height
-        RECT rcStatus;
-        int iStatusHeight;
-        SendMessage(hStatus, WM_SIZE, 0, 0);
-        GetWindowRect(hStatus, &rcStatus);
-        iStatusHeight = rcStatus.bottom - rcStatus.top;
-
-        // Calculate remaining height and size edit
-        int iEditHeight;
-        RECT rcClient;
-        GetClientRect(hwnd, &rcClient);
-        iEditHeight = rcClient.bottom - iStatusHeight;
-        SetWindowPos(hEdit, NULL, 0, 0, rcClient.right, iEditHeight, SWP_NOZORDER);
-
+        RePositionChildren(hwnd);
         break;
     }
 
@@ -370,12 +427,12 @@ LRESULT CALLBACK WndProc(HWND hwnd,
             break;
 
         case M_SELECTALL:
-        {
+            {
             UINT lSel = (LONG)SendMessage(hEdit, WM_GETTEXTLENGTH, 0, 0L);
             SendMessage(hEdit, EM_SETSEL, 0, lSel);
             SendMessage(hEdit, EM_SCROLLCARET, 0, 0);
             break;
-        }
+            }
         }
 
         switch (LOWORD(wParam))
@@ -414,7 +471,7 @@ LRESULT CALLBACK WndProc(HWND hwnd,
         break;
 
     case WM_TIMER:
-        if (++dirtycount >= dirtythreshold)
+        if (++dirtycount >= DIRTYTHRESHOLD)
         {
             DoFileSave(hwnd, FALSE);
             dirtycount = 0;
@@ -456,6 +513,8 @@ int WINAPI WinMain(HINSTANCE hInstance,
     WNDCLASSEX wc = { 0 };
     MSG Msg;
     HWND hwnd;
+    
+    statusarea = TRUE;
 
     InitCommonControls();
     fileopen = FALSE;
@@ -502,7 +561,7 @@ int WINAPI WinMain(HINSTANCE hInstance,
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
     
-    if (SetTimer(hwnd, ID_TIMER, 80, NULL) == 0)
+    if (SetTimer(hwnd, ID_TIMER, TIMERGRANULARITY, NULL) == 0)
         MessageBox(hwnd, "Could not SetTimer()!", "Error", MB_OK | MB_ICONEXCLAMATION);
 
     while (GetMessage(&Msg, NULL, 0, 0) > 0) {
