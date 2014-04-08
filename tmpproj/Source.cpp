@@ -1,83 +1,67 @@
-#include <windows.h>
-#include <commctrl.h>
-#include <stdio.h>
+
 #include "resource.h"
-#include <stdio.h>
-#include <string.h>
-#define IDC_MAIN_EDIT   101
-#define IDC_MAIN_STATUS	103
 
 
-const char g_szClassName[] = "myWindowClass";
-
-const char CleanMsg[] = "clean";
-const char DirtyMsg[] = "dirty";
-
-const UINT TIMERGRANULARITY = 15;   //miliseconds between timer ticks
-const UINT DIRTYTHRESHOLD = 15;     //number of timer ticks without changes before saving
-const int ID_TIMER = 1;             
 
 
-const int DEFFONTSIZE = 20;
-const int MAXFONTSIZE = 100;
-const int MINFONTSIZE = 10;
 
-const int NOFILE_BOARDER_SIZE = 10;
 
-BOOL statusarea;
-const int STATUSAREAHEIGHT = 70;
 
-LPSTR backup;
-DWORD backupsize;
 
-char cmdlinearg_path[MAX_PATH];
-BOOL cmdlinearg_path_set;
-
-HWND hStatus;
-HWND hTool;
-HWND hEdit;
-
-char filename[MAX_PATH];
-char foldername[MAX_PATH];
-BOOL fileopen;
-BOOL filedirty;
-
-UINT dirtycount;
-
-void DoFileSave(HWND hwnd, BOOL forcesave);
-void DoFileOpen(HWND hwnd, LPCTSTR szFileName);
-
-int fontsize;
-VOID SetFont(HWND hwnd, int step)
+VOID DoWM_CREATE(HWND hwnd)
 {
-    //fix me
-    if (step == 545) step = -1;
+    SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)LoadIcon(NULL, MAKEINTRESOURCE(IDI_ICON1)));
 
-    int prevfontsize = fontsize;
+    //Create Edit Control
+    hEdit = CreateWindowEx(
+        WS_EX_CLIENTEDGE,
+        "EDIT", "",
+        WS_CHILD |
+        WS_VISIBLE |
+        WS_VSCROLL |
+        WS_HSCROLL |
+        ES_MULTILINE |
+        ES_AUTOVSCROLL |
+        ES_AUTOHSCROLL,
+        0, 0, 100, 100,
+        hwnd,
+        (HMENU)IDC_MAIN_EDIT,
+        GetModuleHandle(NULL),
+        NULL);
 
-    if (step == 0) { //condition when setting the initial font
-        prevfontsize = 0;
-        fontsize = DEFFONTSIZE;
-    }
-    else
-        fontsize = min(max(fontsize + step, MINFONTSIZE), MAXFONTSIZE);
-    
-    if (prevfontsize != fontsize) 
-    {
-        //broadcast change
-        char buf[100];
-        sprintf_s(buf, "Setting font size to %d", fontsize);
-        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)buf);
+    if (hEdit == NULL)
+        MessageBox(hwnd, "Could not create edit box.", "Error", MB_OK | MB_ICONERROR);
 
-        //send WM_SETFONT
-        HFONT hf = CreateFont(fontsize, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "Times New Roman");
-        SendMessage(hEdit, WM_SETFONT, (WPARAM)hf, MAKELPARAM(TRUE, 0));
-        SendMessage(hwnd, WM_SETFONT, (WPARAM)hf, MAKELPARAM(TRUE, 0));
+    SetFont(hwnd, 0);
 
+    // Create Status bar
+    hStatus = CreateWindowEx(
+        0,
+        STATUSCLASSNAME,
+        NULL,
+        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+        0, 0, 0, 0,
+        hwnd,
+        (HMENU)IDC_MAIN_STATUS,
+        GetModuleHandle(NULL),
+        NULL);
+
+    SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"I'm a status bar!");
+
+    if (cmdlinearg_path_set) {
+
+        //remove quotes from the file path
+        if (cmdlinearg_path[0] == '"') {
+            int len = strlen(cmdlinearg_path);
+            memcpy(cmdlinearg_path, cmdlinearg_path + 1, len - 2);
+            cmdlinearg_path[len - 2] = 0;
+        }
+
+        DoFileOpen(hwnd, (LPSTR)cmdlinearg_path);
     }
 }
 
-VOID RePositionChildren(HWND hwnd)
+VOID DoWM_SIZE(HWND hwnd)
 {
     // Get height of status bar
     RECT rcStatus;
@@ -89,222 +73,87 @@ VOID RePositionChildren(HWND hwnd)
     int boardersize = fileopen ? 0 : NOFILE_BOARDER_SIZE;
 
     int statusAreaHeight = statusarea && fileopen ? STATUSAREAHEIGHT : 0;
-    
+
     // Set size of edit window
     RECT rcClient;
     GetClientRect(hwnd, &rcClient);
     int iEditHeight = rcClient.bottom - iStatusHeight;
     SetWindowPos(hEdit,
-                 NULL,
-                 boardersize,
-                 boardersize + statusAreaHeight,
-                 rcClient.right - 2 * boardersize,
-                 iEditHeight - 2 * boardersize,
-                 SWP_NOZORDER);
+        NULL,
+        boardersize,
+        boardersize + statusAreaHeight,
+        rcClient.right - 2 * boardersize,
+        iEditHeight - 2 * boardersize,
+        SWP_NOZORDER);
 }
 
-VOID Revert(HWND hwnd)
+VOID Do_WM_PANT(HWND hwnd)
 {
-    SetWindowText(hEdit, backup);
-    DoFileSave(hwnd, TRUE);
-}
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(hwnd, &ps);
 
-VOID SaveFileName(HWND hwnd, LPCTSTR szFileName)
-{
-    //save the file name to our global string
-    memcpy(filename, szFileName, strlen(szFileName));
-    fileopen = TRUE;
-
-    //update the window title to inlude opend file name
-    int size = strlen(szFileName) + 10;
-    char* wintitle = (LPSTR)GlobalAlloc(GPTR, size);
-    sprintf(wintitle, "SAVEpad: %s", filename);
-    SetWindowText(hwnd, wintitle);
-    GlobalFree(wintitle);
-
-
-    //create folder name
-        //BEFORE "C:\Users\evkoschi\Desktop\tmp.txt"
-        //AFTR   "C:\\Users\\evkoschi\\Desktop"
-    //ex: double backslashed, and take of everything after and including last slash
-}
-
-BOOL LoadTextFile(HWND hEdit, LPCTSTR pszFileName)
-{
-    HANDLE hFile;
-    BOOL bSuccess = FALSE;
-
-    hFile = CreateFile(pszFileName, 
-                       GENERIC_READ, 
-                       FILE_SHARE_READ, 
-                       NULL,
-                       OPEN_EXISTING, 
-                       0, 
-                       NULL);
-
-    if (hFile != INVALID_HANDLE_VALUE)
+    if (!fileopen)
     {
-        backupsize = GetFileSize(hFile, NULL);
-        if (backupsize != 0xFFFFFFFF)
-        {
-            
-            backup = (LPSTR)GlobalAlloc(GPTR, backupsize + 1);
-            if (backup != NULL)
-            {
-                DWORD dwRead;
+        RECT rcClient;
+        GetClientRect(hwnd, &rcClient);
+        FillRect(hdc, &rcClient, CreateSolidBrush(RGB(255, 0, 0)));
 
-                if (ReadFile(hFile, backup, backupsize, &dwRead, NULL))
-                {
-                    // Add null terminator
-                    backup[backupsize] = 0;
-
-                    if (SetWindowText(hEdit, backup)) {
-                        // It worked!
-                        bSuccess = TRUE; 
-                    }
-                }
-                
-            }
-        }
-        CloseHandle(hFile);
     }
-    return bSuccess;
+
+    else if (statusarea)
+    {
+        RECT rcClient;
+        GetClientRect(hwnd, &rcClient);
+
+        RECT rcStatusArea = { 0, 0, rcClient.right, STATUSAREAHEIGHT };
+        //            FillRect(hdc, &rcClient, CreateSolidBrush(RGB(0, 0, 255)));
+
+
+        RECT rc = { 30, 30, 150, 150 };
+        DrawText(hdc, "This is some text.", 18, &rc, DT_LEFT | DT_EDITCONTROL);
+    }
+
+    EndPaint(hwnd, &ps);
 }
 
-void DoFileOpen(HWND hwnd, LPSTR filepath)
+VOID DoWM_COMMAND(HWND hwnd, WPARAM wParam, LPARAM lParam)
 {
-    if (fileopen) DoFileSave(hwnd, TRUE);
 
-    if (filepath == NULL)
+    //The Edit control's change messages are stored in the HIWORD of wParam
+    switch (HIWORD(wParam))
     {
-        OPENFILENAME ofn;
-        char szFileName[MAX_PATH] = "";
-
-        ZeroMemory(&ofn, sizeof(ofn));
-
-        ofn.lStructSize = sizeof(OPENFILENAME);
-        ofn.hwndOwner = hwnd;
-        ofn.lpstrFilter = "Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
-        ofn.lpstrFile = szFileName;
-        ofn.nMaxFile = MAX_PATH;
-
-        ofn.Flags = OFN_EXPLORER |
-            OFN_CREATEPROMPT |
-            OFN_HIDEREADONLY;
-
-        ofn.lpstrDefExt = "txt";
-
-        if (GetOpenFileName(&ofn))
-        {
-            filepath = szFileName;
+    case EN_CHANGE:
+        if (fileopen) {
+            SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)DirtyMsg);
+            filedirty = TRUE;
+            TimerReset();
         }
+        else {
+            SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"File not opened! (save or open new file).");
+        }
+        break;
 
     }
-    
 
-    if (filepath != NULL) {
-        if (!LoadTextFile(hEdit, filepath)) {
-            SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"Created New File.");
-            SetWindowText(hEdit, "");
-        }
-        else{
-            char buf[2 * MAX_PATH] = { 0 };
-            sprintf_s(buf, "File Opened: %s", filepath);
-            SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)buf);
-        }
-        SaveFileName(hwnd, filepath);
-    }
 
-    RePositionChildren(hwnd);
-    UpdateWindow(hwnd);
-}
-
-BOOL SaveTextFile(HWND hEdit, LPCTSTR pszFileName)
-{
-    HANDLE hFile;
-    BOOL bSuccess = FALSE;
-
-    hFile = CreateFile(pszFileName, 
-                       GENERIC_WRITE, 
-                       0, 
-                       NULL,
-                       CREATE_ALWAYS, 
-                       FILE_ATTRIBUTE_NORMAL, 
-                       NULL);
-    if (hFile != INVALID_HANDLE_VALUE)
+    //Messages from the Menu in LOWORD of wParam
+    switch (LOWORD(wParam))
     {
-        DWORD dwTextLength;
-
-        dwTextLength = GetWindowTextLength(hEdit);
-        
-        LPSTR pszText;
-        DWORD dwBufferSize = dwTextLength + 1;
-
-        pszText = (LPSTR)GlobalAlloc(GPTR, dwBufferSize);
-        if (pszText != NULL)
-        {
-            GetWindowText(hEdit, pszText, dwBufferSize);
-            
-            DWORD dwWritten;
-
-            WriteFile(hFile, pszText, dwTextLength, &dwWritten, NULL);
-            bSuccess = TRUE;
-            
-            GlobalFree(pszText);
-        }
-        
-        CloseHandle(hFile);
-    }
-    return bSuccess;
-}
-
-void DoFileSave(HWND hwnd, BOOL forcesave)
-{
-    if (fileopen && !filedirty)
-        return;
-
-
-    BOOL success = FALSE;
-    if (fileopen) 
-    {
-        //We have a file opened, assuming that we are saving the same file
-        if (SaveTextFile(hEdit, filename))
-            success = TRUE;
-    }
-    else if (forcesave){
-
-        //Prompt user to pick a save location
-
-        OPENFILENAME ofn;
-        char szFileName[MAX_PATH] = "";
-
-        ZeroMemory(&ofn, sizeof(ofn));
-
-        ofn.lStructSize = sizeof(OPENFILENAME);
-        ofn.hwndOwner = hwnd;
-        ofn.lpstrFilter = "Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
-        ofn.lpstrFile = szFileName;
-        ofn.nMaxFile = MAX_PATH;
-        ofn.lpstrDefExt = "txt";
-        ofn.Flags = OFN_EXPLORER | 
-                    OFN_PATHMUSTEXIST | 
-                    OFN_HIDEREADONLY |
-                    OFN_OVERWRITEPROMPT;
-
-        if (GetSaveFileName(&ofn) && SaveTextFile(hEdit, szFileName)) {
-            success = TRUE;
-            SaveFileName(hwnd, szFileName);
-        }
+    case ID_FILE_OPEN:
+        DoFileOpen(hwnd, (LPSTR)0);
+        break;
+    case ID_FILE_EXIT:
+        PostMessage(hwnd, WM_CLOSE, 0, 0);
+        break;
+    case ID_FILE_EXITWITHOUTSAVING:
+        Revert(hwnd);
+        PostMessage(hwnd, WM_CLOSE, 0, 0);
+        break;
+    case ID_FILE_REVERT:
+        Revert(hwnd);
+        break;
 
     }
-
-    if (success) {
-        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)CleanMsg);
-        filedirty = FALSE;
-        dirtycount = 0;
-    }
-    else if (forcesave || fileopen)
-        MessageBox(hwnd, "File not saved!", "Error", MB_OK | MB_ICONERROR);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd,
@@ -316,166 +165,27 @@ LRESULT CALLBACK WndProc(HWND hwnd,
     {
     
     case WM_CREATE:
-    {
-        SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)LoadIcon(NULL, MAKEINTRESOURCE(IDI_ICON1)));
-        
-        backup = NULL;
-        backupsize = 0;
-
-        //Create Edit Control
-         hEdit = CreateWindowEx(
-                    WS_EX_CLIENTEDGE, 
-                    "EDIT", "", 
-                    WS_CHILD |
-                        WS_VISIBLE | 
-                        WS_VSCROLL | 
-                        WS_HSCROLL | 
-                        ES_MULTILINE | 
-                        ES_AUTOVSCROLL | 
-                        ES_AUTOHSCROLL, 
-                    0, 0, 100, 100, 
-                    hwnd, 
-                    (HMENU)IDC_MAIN_EDIT, 
-                    GetModuleHandle(NULL),
-                    NULL);
-
-        if(hEdit == NULL)
-            MessageBox(hwnd, "Could not create edit box.", "Error", MB_OK | MB_ICONERROR);
+        DoWM_CREATE(hwnd);
+        break;
     
-        SetFont(hwnd, 0);
-        
-        // Create Status bar
-        hStatus = CreateWindowEx(
-                        0, 
-                        STATUSCLASSNAME, 
-                        NULL,
-                        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 
-                        0, 0, 0, 0,
-                        hwnd, 
-                        (HMENU)IDC_MAIN_STATUS, 
-                        GetModuleHandle(NULL), 
-                        NULL);
-
-        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"I'm a status bar!");
-        
-        if (cmdlinearg_path_set) {
-
-            //remove quotes from the file path
-            if (cmdlinearg_path[0] == '"') {
-                int len = strlen(cmdlinearg_path);
-                memcpy(cmdlinearg_path, cmdlinearg_path + 1, len - 2);
-                cmdlinearg_path[len - 2] = 0;
-            }
-
-            DoFileOpen(hwnd, (LPSTR)cmdlinearg_path);
-        }
-
-        ShellExecute(hwnd, "open", NULL, NULL, "C:\Users\evkoschi\Desktop", SW_SHOWNORMAL);
-
-        break; 
-    }
+    case WM_SIZE:
+        DoWM_SIZE(hwnd);
+        break;
 
     case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-
-        if (!fileopen) 
-        {
-            RECT rcClient;
-            GetClientRect(hwnd, &rcClient);
-            FillRect(hdc, &rcClient, CreateSolidBrush(RGB(255, 0, 0)));
-            
-        }
-        
-        else if (statusarea)
-        {
-            RECT rcClient;
-            GetClientRect(hwnd, &rcClient);
-
-            RECT rcStatusArea = { 0, 0, rcClient.right, STATUSAREAHEIGHT };
-//            FillRect(hdc, &rcClient, CreateSolidBrush(RGB(0, 0, 255)));
-
-
-            RECT rc = {30,30,150,150};
-            DrawText(hdc, "This is some text.", 18, &rc, DT_LEFT | DT_EDITCONTROL);
-        }
-
-        EndPaint(hwnd, &ps);
-        
+        Do_WM_PANT(hwnd);
         break;
-    }
-    case WM_SIZE:
-    {
-        RePositionChildren(hwnd);
-        break;
-    }
-
+    
     case WM_COMMAND:
-
-        switch (HIWORD(wParam)) {
-        case EN_CHANGE:
-            if (fileopen) {
-                SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)DirtyMsg);
-                filedirty = TRUE;
-                
-                dirtycount = 0; //reset the dirty clock
-            }
-            else {
-                SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"File not opened! (save or open new file).");
-            }
-            break;
-
-        case M_SELECTALL:
-            {
-            UINT lSel = (LONG)SendMessage(hEdit, WM_GETTEXTLENGTH, 0, 0L);
-            SendMessage(hEdit, EM_SETSEL, 0, lSel);
-            SendMessage(hEdit, EM_SCROLLCARET, 0, 0);
-            break;
-            }
-        }
-
-        switch (LOWORD(wParam))
-        {
-        case ID_FILE_OPEN:
-            DoFileOpen(hwnd, (LPSTR)0);
-            break;
-        case ID_FILE_EXIT:
-            PostMessage(hwnd, WM_CLOSE, 0, 0);
-            break;
-        case ID_FILE_EXITWITHOUTSAVING:
-            Revert(hwnd);
-            PostMessage(hwnd, WM_CLOSE, 0, 0);
-            break;
-        case ID_FILE_REVERT:
-            Revert(hwnd);
-            break;
-
-        case M_SELECTALL:
-        {
-            UINT lSel = (LONG)SendMessage(hEdit, WM_GETTEXTLENGTH, 0, 0L);
-            SendMessage(hEdit, EM_SETSEL, 0, lSel);
-            SendMessage(hEdit, EM_SCROLLCARET, 0, 0);
-            break;
-        }
-        
-        }
+        DoWM_COMMAND(hwnd, wParam, lParam);
         break;
 
     case WM_MOUSEWHEEL:
-        if (LOWORD(wParam) == MK_CONTROL) {
-            SetFont(hwnd, HIWORD(wParam) / WHEEL_DELTA);
-        }
-        else
-            SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"ProTip: hold control while you scroll ;)");
+        MouseScroll(hwnd, wParam);
         break;
 
     case WM_TIMER:
-        if (++dirtycount >= DIRTYTHRESHOLD)
-        {
-            DoFileSave(hwnd, FALSE);
-            dirtycount = 0;
-        }
+        TimerTick(hwnd);
         break;
     
     case WM_CLOSE:
@@ -495,33 +205,10 @@ LRESULT CALLBACK WndProc(HWND hwnd,
     return 0;
 }
 
-
-int WINAPI WinMain(HINSTANCE hInstance, 
-                   HINSTANCE hPrevInstance,
-                   LPSTR lpCmdLine, 
-                   int nCmdShow)
+HWND RegisterAndCreateMainWindow(HINSTANCE hInstance)
 {
-    //Read command line, and interpret anything as a file path to open
-    ZeroMemory(cmdlinearg_path, MAX_PATH);
-    cmdlinearg_path_set = FALSE;
-    if (strcmp(lpCmdLine, ""))
-    {
-        sprintf_s(cmdlinearg_path, lpCmdLine);
-        cmdlinearg_path_set = TRUE;
-    }
-
     WNDCLASSEX wc = { 0 };
-    MSG Msg;
-    HWND hwnd;
-    
-    statusarea = TRUE;
-
-    InitCommonControls();
-    fileopen = FALSE;
-    filedirty = FALSE;
-    dirtycount = 0;
-
-    wc.cbSize = sizeof(WNDCLASSEX); 
+    wc.cbSize = sizeof(WNDCLASSEX);
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
     wc.cbClsExtra = 0;
@@ -534,15 +221,14 @@ int WINAPI WinMain(HINSTANCE hInstance,
     wc.lpszClassName = g_szClassName;
     wc.hIconSm = LoadIcon(wc.hInstance, MAKEINTRESOURCE(IDI_ICON1));
     if (!RegisterClassEx(&wc)) {
-        MessageBox(NULL, "Window Registration Failed!", "Error!",
-            MB_ICONEXCLAMATION | MB_OK);
+        MessageBox(NULL, "Window Registration Failed!", "Error!", MB_ICONEXCLAMATION | MB_OK);
         return 0;
     }
-    
-    hwnd = CreateWindowEx(
+
+    HWND hwnd = CreateWindowEx(
         WS_EX_CLIENTEDGE,        //extended window style
         g_szClassName,           //ties the new window to the window class we just created
-        "SAVEpad",               //Window Title
+        "SAVEpad",               //(Initial) Window Title
         WS_OVERLAPPEDWINDOW,     //window style
         CW_USEDEFAULT,           //start x
         CW_USEDEFAULT,           //start y
@@ -554,20 +240,57 @@ int WINAPI WinMain(HINSTANCE hInstance,
         NULL);                   //Window Creation Data
 
     if (hwnd == NULL) {
-        MessageBox(NULL, "Window Creation Failed!", "Error!",
-            MB_ICONEXCLAMATION | MB_OK);
+        MessageBox(NULL, "Window Creation Failed!", "Error!", MB_ICONEXCLAMATION | MB_OK);
         return 0;
     }
+
+    return hwnd;
+}
+
+int WINAPI WinMain(HINSTANCE hInstance, 
+                   HINSTANCE hPrevInstance,
+                   LPSTR lpCmdLine, 
+                   int nCmdShow)
+{
+    statusarea = TRUE;
+    fileopen = FALSE;
+    filedirty = FALSE;
+    dirtycount = 0;
+    backup = NULL;
+    backupsize = 0;
+
+    //Create Window
+    HWND hwnd;
+    if ((hwnd = RegisterAndCreateMainWindow(hInstance)) == NULL) {
+        return 0;
+    }
+    
+    //Read command line args
+    ZeroMemory(cmdlinearg_path, MAX_PATH);
+    cmdlinearg_path_set = FALSE;
+    if (strcmp(lpCmdLine, ""))
+    {
+        sprintf_s(cmdlinearg_path, lpCmdLine);
+        cmdlinearg_path_set = TRUE;
+    }
+
+    //Mark Window as Visible
     ShowWindow(hwnd, nCmdShow);
+
+    //Sends initial WM_PAINT, possibly not needed?
     UpdateWindow(hwnd);
     
+    //Register 'dirty' timer
     if (SetTimer(hwnd, ID_TIMER, TIMERGRANULARITY, NULL) == 0)
         MessageBox(hwnd, "Could not SetTimer()!", "Error", MB_OK | MB_ICONEXCLAMATION);
 
-    while (GetMessage(&Msg, NULL, 0, 0) > 0) {
-        TranslateMessage(&Msg);
-        DispatchMessage(&Msg);
+    //Ye Ol' Message Pump
+    MSG m;
+    while (GetMessage(&m, NULL, 0, 0) > 0) {
+        TranslateMessage(&m);
+        DispatchMessage(&m);
     }
-    return Msg.wParam;
+
+    return m.wParam;
 }
 
