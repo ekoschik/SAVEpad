@@ -18,10 +18,10 @@
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="SAVEpad.rc" />
+    <Image Include="..\save2.ico" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="..\save2.ico" />
+    <ResourceCompile Include="SAVEpad1.rc" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{9CDF2431-8479-4073-89DD-ADD866D2411F}</ProjectGuid>

@@ -6,7 +6,8 @@ LPSTR backup;
 DWORD backupsize;
 char foldername[MAX_PATH]; 
 BOOL statusarea;
-
+BOOL statusbar;
+BOOL OrigDataWindow;
 
 char cmdlinearg_path[MAX_PATH];
 BOOL cmdlinearg_path_set;
@@ -14,8 +15,15 @@ BOOL cmdlinearg_path_set;
 HWND hStatus;
 HWND hTool;
 HWND hEdit;
+HWND hOpenFolderButton;
+HWND hRevertButton;
+HWND hOpenButton;
+HWND hOriginalDataWindow;
 
-char filename[MAX_PATH];
+char g_filepath[MAX_PATH];
+char g_folderpath[MAX_PATH];
+char g_filename[MAX_PATH];
+
 BOOL fileopen;
 BOOL filedirty;
 
@@ -23,15 +31,36 @@ UINT dirtycount;
 
 VOID TimerTick(HWND hwnd)
 {
-    if (++dirtycount >= DIRTYTHRESHOLD)
-    {
-        DoFileSave(hwnd, FALSE);
-        dirtycount = 0;
+    if (fileopen && dirtycount != 0) {
+        if (++dirtycount >= DIRTYTHRESHOLD)
+        {
+            SaveOpenedFile(hwnd);
+        }
     }
 }
+
 VOID TimerReset()
 {
     dirtycount = 0;
+}
+
+VOID Revert(HWND hwnd)
+{
+    if (MessageBox(hwnd,
+                   "Are you sure you want revert all of your changes?", 
+                   "Message", 
+                   MB_YESNO) == IDYES)
+    {
+        if (fileopen) {
+            SetWindowText(hEdit, backup);
+            SaveOpenedFile(hwnd);
+        }
+    }
+}
+
+VOID OpenFolder(HWND hwnd)
+{
+    ShellExecute(hwnd, "open", NULL, NULL, g_folderpath, SW_SHOWNORMAL);
 }
 
 VOID MouseScroll(HWND hwnd, WPARAM wParam)
@@ -43,6 +72,16 @@ VOID MouseScroll(HWND hwnd, WPARAM wParam)
         SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"ProTip: hold control while you scroll ;)");
 }
 
+VOID FullRedraw(HWND hwnd)
+{
+    //TODO this is unnecessary, probably
+
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    InvalidateRect(hwnd, &rc, TRUE);
+    DoWM_SIZE(hwnd);
+    Do_WM_PAINT(hwnd);
+}
 
 int fontsize;
 VOID SetFont(HWND hwnd, int step)
@@ -74,49 +113,76 @@ VOID SetFont(HWND hwnd, int step)
     }
 }
 
-
-
-
-
-
-
-VOID Revert(HWND hwnd)
-{
-    SetWindowText(hEdit, backup);
-    DoFileSave(hwnd, TRUE);
-}
-
-VOID SaveFileName(HWND hwnd, LPCTSTR szFileName)
+VOID SaveFileName(HWND hwnd, LPCTSTR FilePath)
 {
     //save the file name to our global string
-    memcpy(filename, szFileName, strlen(szFileName));
-    fileopen = TRUE;
+    memcpy(g_filepath, FilePath, strlen(FilePath));
+
+    //save folder path in 'shell executable' format
+    ZeroMemory(g_folderpath, MAX_PATH);
+    int srcptr = 0;
+    int dstptr = 0;
+    int filenameptr = strlen(g_filepath) - 1;
+    while (g_filepath[filenameptr] != '\\') { filenameptr--; }
+    while (srcptr < filenameptr) {
+        if (g_filepath[srcptr] == '\\')
+            g_folderpath[dstptr++] = '\\';
+        g_folderpath[dstptr++] = g_filepath[srcptr++];
+    }
+    
+    //copy just the file name
+    memcpy(g_filename, g_filepath + filenameptr + 1, strlen(g_filepath + filenameptr + 1));
+
+    
 
     //update the window title to inlude opend file name
-    int size = strlen(szFileName) + 10;
+    int size = strlen(FilePath) + 10;
     char* wintitle = (LPSTR)GlobalAlloc(GPTR, size);
-    sprintf(wintitle, "SAVEpad: %s", filename);
+    sprintf(wintitle, "SAVEpad: %s", g_filename);
     SetWindowText(hwnd, wintitle);
     GlobalFree(wintitle);
 
 
-    //create folder name
-    //BEFORE "C:\Users\evkoschi\Desktop\tmp.txt"
-    //AFTR   "C:\\Users\\evkoschi\\Desktop"
-    //ex: double backslashed, and take of everything after and including last slash
+}
 
-    //to open folder:
-    //    ShellExecute(hwnd, "open", NULL, NULL, **folder name**, SW_SHOWNORMAL);
+BOOL PromptForFilePath(HWND hwnd, LPSTR buf)
+{
+    OPENFILENAME ofn;
 
+    ZeroMemory(&ofn, sizeof(ofn));
+
+    ofn.lStructSize = sizeof(OPENFILENAME);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = "Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = MAX_PATH;
+
+    ofn.Flags = OFN_EXPLORER |
+        OFN_CREATEPROMPT |
+        OFN_HIDEREADONLY;
+
+    ofn.lpstrDefExt = "txt";
+
+    if (!GetOpenFileName(&ofn)) {
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"Error, prompt for file failed.");
+        return FALSE;
+    }
+    return TRUE;
 
 }
 
-BOOL LoadTextFile(HWND hEdit, LPCTSTR pszFileName)
+
+/*
+ * Loading Files
+*/
+
+BOOL LoadTextFile(HWND hwnd, HWND hEdit, LPCTSTR FilePath)
 {
     HANDLE hFile;
     BOOL bSuccess = FALSE;
 
-    hFile = CreateFile(pszFileName,
+    //First assume file exists and try to open it
+    hFile = CreateFile(FilePath,
         GENERIC_READ,
         FILE_SHARE_READ,
         NULL,
@@ -124,166 +190,171 @@ BOOL LoadTextFile(HWND hEdit, LPCTSTR pszFileName)
         0,
         NULL);
 
-    if (hFile != INVALID_HANDLE_VALUE)
+    //Failure here means we should assume file needs to be created
+    if (hFile == INVALID_HANDLE_VALUE)
     {
-        backupsize = GetFileSize(hFile, NULL);
-        if (backupsize != 0xFFFFFFFF)
-        {
+        hFile = CreateFile(FilePath,
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            NULL,
+            CREATE_NEW, //new file
+            0,
+            NULL);
 
-            backup = (LPSTR)GlobalAlloc(GPTR, backupsize + 1);
-            if (backup != NULL)
-            {
-                DWORD dwRead;
-
-                if (ReadFile(hFile, backup, backupsize, &dwRead, NULL))
-                {
-                    // Add null terminator
-                    backup[backupsize] = 0;
-
-                    if (SetWindowText(hEdit, backup)) {
-                        // It worked!
-                        bSuccess = TRUE;
-                    }
-                }
-
-            }
+        if (hFile == INVALID_HANDLE_VALUE) {
+            SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"CreateFile Failed, is it a new file?");
+            return FALSE;
         }
-        CloseHandle(hFile);
+
+        //broadcast file created
+        char buf[2 * MAX_PATH] = { 0 };
+        sprintf_s(buf, "File Created: %s", FilePath);
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)buf);
     }
+    else {
+
+        //broadcast file opened
+        char buf[2 * MAX_PATH] = { 0 };
+        sprintf_s(buf, "File Opened: %s", FilePath);
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)buf);
+    }
+
+    //backupsize and backup are globals
+
+    backupsize = GetFileSize(hFile, NULL);
+    if (backupsize != 0xFFFFFFFF)
+    {
+        backup = (LPSTR)GlobalAlloc(GPTR, backupsize + 1);
+        if (backup != NULL)
+        {
+            DWORD dwRead;
+
+            if (ReadFile(hFile, backup, backupsize, &dwRead, NULL))
+            {
+                // Add null terminator
+                backup[backupsize] = 0;
+
+                if (SetWindowText(hEdit, backup)) {
+                    // It worked!
+                    bSuccess = TRUE;
+
+                    if (!SetWindowText(hOriginalDataWindow, backup)) {
+                        MessageBox(NULL, "Saving text to hOriginalDataWindow failed!", "Error!", MB_ICONEXCLAMATION | MB_OK);
+                    }
+
+                }
+            }
+
+        }
+    }
+
+    CloseHandle(hFile);
+    
+    SaveFileName(hwnd, FilePath);
+
+    fileopen = TRUE;
+
+    if (!bSuccess) {
+        //broadcast failure
+        char buf[2 * MAX_PATH] = { 0 };
+        sprintf_s(buf, "LoadTextFile failed. passed [%s]", FilePath);
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)buf);
+    }
+    else {
+        //boradcast success
+        char msg[100] = "";
+        sprintf_s(msg, "Loaded File: %s", FilePath);
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)msg);
+    }
+
+    
+    FullRedraw(hwnd);
+
     return bSuccess;
 }
 
-void DoFileOpen(HWND hwnd, LPSTR filepath)
+VOID PromptAndLoadFile(HWND hwnd) 
 {
-    if (fileopen) DoFileSave(hwnd, TRUE);
-
-    if (filepath == NULL)
-    {
-        OPENFILENAME ofn;
-        char szFileName[MAX_PATH] = "";
-
-        ZeroMemory(&ofn, sizeof(ofn));
-
-        ofn.lStructSize = sizeof(OPENFILENAME);
-        ofn.hwndOwner = hwnd;
-        ofn.lpstrFilter = "Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
-        ofn.lpstrFile = szFileName;
-        ofn.nMaxFile = MAX_PATH;
-
-        ofn.Flags = OFN_EXPLORER |
-            OFN_CREATEPROMPT |
-            OFN_HIDEREADONLY;
-
-        ofn.lpstrDefExt = "txt";
-
-        if (GetOpenFileName(&ofn))
-        {
-            filepath = szFileName;
-        }
-
+    char filePath[MAX_PATH] = "";
+    if (PromptForFilePath(hwnd, filePath)) {
+        LoadTextFile(hwnd, hEdit, filePath);
     }
-
-
-    if (filepath != NULL) {
-        if (!LoadTextFile(hEdit, filepath)) {
-            SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"Created New File.");
-            SetWindowText(hEdit, "");
-        }
-        else{
-            char buf[2 * MAX_PATH] = { 0 };
-            sprintf_s(buf, "File Opened: %s", filepath);
-            SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)buf);
-        }
-        SaveFileName(hwnd, filepath);
-    }
-
-    DoWM_SIZE(hwnd);
 }
 
-BOOL SaveTextFile(HWND hEdit, LPCTSTR pszFileName)
+
+
+
+
+
+
+
+/*
+* Saving Files
+*/
+
+
+BOOL SaveTextFile(HWND hEdit, LPCTSTR FilePath)
 {
     HANDLE hFile;
     BOOL bSuccess = FALSE;
 
-    hFile = CreateFile(pszFileName,
+    hFile = CreateFile(FilePath,
         GENERIC_WRITE,
         0,
         NULL,
         CREATE_ALWAYS,
         FILE_ATTRIBUTE_NORMAL,
         NULL);
-    if (hFile != INVALID_HANDLE_VALUE)
+
+    if (hFile == INVALID_HANDLE_VALUE)
     {
-        DWORD dwTextLength;
-
-        dwTextLength = GetWindowTextLength(hEdit);
-
-        LPSTR pszText;
-        DWORD dwBufferSize = dwTextLength + 1;
-
-        pszText = (LPSTR)GlobalAlloc(GPTR, dwBufferSize);
-        if (pszText != NULL)
-        {
-            GetWindowText(hEdit, pszText, dwBufferSize);
-
-            DWORD dwWritten;
-
-            WriteFile(hFile, pszText, dwTextLength, &dwWritten, NULL);
-            bSuccess = TRUE;
-
-            GlobalFree(pszText);
-        }
-
-        CloseHandle(hFile);
+        char buf[2 * MAX_PATH] = { 0 };
+        sprintf_s(buf, "Error: SaveTextFile failed to open file [%s]", FilePath);
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)buf);
+        return FALSE;
     }
+
+
+    DWORD filesize = GetWindowTextLength(hEdit) + 1;
+    LPSTR buf = (LPSTR)GlobalAlloc(GPTR, filesize);
+    if (buf == NULL) {
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"SaveTextFile failed, couldnt allocate memory.");
+        return FALSE;
+    }
+
+    GetWindowText(hEdit, buf, filesize);
+    DWORD tmp;
+    if (!WriteFile(hFile, buf, filesize, &tmp, NULL)) {
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"SaveTextFile, WriteFile failed.");
+        bSuccess = FALSE;
+    }
+
+    GlobalFree(buf);
+
+    CloseHandle(hFile);
+
+    SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)CleanMsg);
+    
+    filedirty = FALSE;
+
+    dirtycount = 0;
+
     return bSuccess;
+
 }
 
-void DoFileSave(HWND hwnd, BOOL forcesave)
+BOOL SaveOpenedFile(HWND hwnd)
 {
-    if (fileopen && !filedirty)
+    if (!fileopen) return FALSE;
+    return SaveTextFile(hEdit, g_filepath);
+}
+
+VOID EmergenecySave(HWND hwnd)
+{
+    if (SaveOpenedFile(hwnd))
         return;
 
-
-    BOOL success = FALSE;
-    if (fileopen)
-    {
-        //We have a file opened, assuming that we are saving the same file
-        if (SaveTextFile(hEdit, filename))
-            success = TRUE;
+    if (!fileopen && GetWindowTextLength(hEdit) > 0) {
+        //TODO: should warn user that they are losing data
     }
-    else if (forcesave){
-
-        //Prompt user to pick a save location
-
-        OPENFILENAME ofn;
-        char szFileName[MAX_PATH] = "";
-
-        ZeroMemory(&ofn, sizeof(ofn));
-
-        ofn.lStructSize = sizeof(OPENFILENAME);
-        ofn.hwndOwner = hwnd;
-        ofn.lpstrFilter = "Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
-        ofn.lpstrFile = szFileName;
-        ofn.nMaxFile = MAX_PATH;
-        ofn.lpstrDefExt = "txt";
-        ofn.Flags = OFN_EXPLORER |
-            OFN_PATHMUSTEXIST |
-            OFN_HIDEREADONLY |
-            OFN_OVERWRITEPROMPT;
-
-        if (GetSaveFileName(&ofn) && SaveTextFile(hEdit, szFileName)) {
-            success = TRUE;
-            SaveFileName(hwnd, szFileName);
-        }
-
-    }
-
-    if (success) {
-        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)CleanMsg);
-        filedirty = FALSE;
-        dirtycount = 0;
-    }
-    else if (forcesave || fileopen)
-        MessageBox(hwnd, "File not saved!", "Error", MB_OK | MB_ICONERROR);
 }
