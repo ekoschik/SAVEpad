@@ -5,7 +5,27 @@
 
 VOID DoWM_CREATE(HWND hwnd)
 {
+    //Icons ;)
     SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)LoadIcon(NULL, MAKEINTRESOURCE(IDI_ICON1)));
+    SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)LoadIcon(NULL, MAKEINTRESOURCE(IDI_ICON1)));
+
+
+    // Create Status bar
+    hStatus = CreateWindowEx(
+        0,
+        STATUSCLASSNAME,
+        NULL,
+        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+        0, 0, 0, 0,
+        hwnd,
+        (HMENU)IDC_MAIN_STATUS,
+        GetModuleHandle(NULL),
+        NULL);
+
+    if (hStatus == NULL)
+        MessageBox(hwnd, "Could not create edit box.", "Error", MB_OK | MB_ICONERROR);
+    else
+        SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"I'm a status bar!");
 
     //Create Edit Control
     hEdit = CreateWindowEx(
@@ -18,7 +38,7 @@ VOID DoWM_CREATE(HWND hwnd)
         ES_MULTILINE |
         ES_AUTOVSCROLL |
         ES_AUTOHSCROLL,
-        0, 0, 100, 100,
+        0, 0, 0, 0, 
         hwnd,
         (HMENU)IDC_MAIN_EDIT,
         GetModuleHandle(NULL),
@@ -27,6 +47,7 @@ VOID DoWM_CREATE(HWND hwnd)
     if (hEdit == NULL)
         MessageBox(hwnd, "Could not create edit box.", "Error", MB_OK | MB_ICONERROR);
 
+    //create backup window
     hOriginalDataWindow = CreateWindowEx(
         WS_EX_CLIENTEDGE,
         "EDIT", "",
@@ -48,22 +69,6 @@ VOID DoWM_CREATE(HWND hwnd)
         MessageBox(hwnd, "Could not create edit box.", "Error", MB_OK | MB_ICONERROR);
 
     SetFont(hwnd, 0);
-
-    // Create Status bar
-    hStatus = CreateWindowEx(
-        0,
-        STATUSCLASSNAME,
-        NULL,
-        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
-        0, 0, 0, 0,
-        hwnd,
-        (HMENU)IDC_MAIN_STATUS,
-        GetModuleHandle(NULL),
-        NULL);
-
-    SendMessage(hStatus, SB_SETTEXT, 0, (LPARAM)"I'm a status bar!");
-
-    int halfOfStatusAreaHeight = (STATUSAREAHEIGHT - 2 * 10) / 2;
 
     //create 'open folder' button
     hOpenFolderButton = CreateWindowEx(
@@ -101,6 +106,9 @@ VOID DoWM_CREATE(HWND hwnd)
         GetModuleHandle(NULL),
         NULL);
 
+    if (hOpenFolderButton == NULL || hRevertButton == NULL || hOpenButton == NULL)
+        MessageBox(hwnd, "Could not create one of the buttons.", "Error", MB_OK | MB_ICONERROR);
+
     if (cmdlinearg_path_set) {
 
         //remove quotes from the file path
@@ -110,159 +118,164 @@ VOID DoWM_CREATE(HWND hwnd)
             cmdlinearg_path[len - 2] = 0;
         }
 
+        //use given path to load the initial file
         LoadTextFile(hwnd, hEdit, (LPSTR)cmdlinearg_path);
     }
 }
 
+
 VOID DoWM_SIZE(HWND hwnd)
 {
-    RECT rcClient;
-    GetClientRect(hwnd, &rcClient);
 
-    int border = 10;
-    int buttonwidth = 150;
+    int buttonwidth = 150;//fixme
     int buttonheight = 150;
+    int border = 10;
+
+    RECT rcClient;
+    if (!GetClientRect(hwnd, &rcClient)) { };
+
+    RECT rcempty;
+    if (!SetRect(&rcempty, 0, 0, 0, 0)) { };
+
+    RECT remaining_space;
+    if (!CopyRect(&remaining_space, &rcClient)) { }
 
 
-    int iStatusHeight = 0;
-    int statusAreaHeight = 0;
-    int origDataWindowHeight = 0;
 
-
-    // set siStatusHeight
+    //get status bar rect, subtrace from remaining space
+    RECT rcstatusbar;
+    if (!CopyRect(&rcstatusbar, &rcempty)) {}
     if (statusbar) {
-        RECT rcStatus;
-        SendMessage(hStatus, WM_SIZE, 0, 0); //why?
-        GetWindowRect(hStatus, &rcStatus);
-        iStatusHeight = rcStatus.bottom - rcStatus.top;
+        SendMessage(hStatus, WM_SIZE, 0, 0);
+        GetWindowRect(hStatus, &rcstatusbar);
+        remaining_space.bottom -= rcstatusbar.bottom - rcstatusbar.top;
     }
     
-    // resize buttons, and set statusAreaHeight
+
+
+
+    //status area, the open folder, revert, and open file buttons
+    RECT rcstatusarea;
+    if (!CopyRect(&rcstatusarea, &rcempty)) {}
     if (!statusarea) {
         MoveWindow(hOpenFolderButton, 0, 0, 0, 0, TRUE);
         MoveWindow(hRevertButton, 0, 0, 0, 0, TRUE);
         MoveWindow(hOpenButton, 0, 0, 0, 0, TRUE);
     }
-    else  {
+    else {
 
-        statusAreaHeight = STATUSAREAHEIGHT;
+        //subtract status area from remaining space
+        if (!CopyRect(&rcstatusarea, &remaining_space)) {}
+        rcstatusarea.bottom = rcstatusarea.top + STATUSAREAHEIGHT;
+        remaining_space.top = rcstatusarea.bottom;
 
         if (fileopen) {
-            MoveWindow(hOpenFolderButton, rcClient.right - buttonwidth, 0, buttonwidth, STATUSAREAHEIGHT / 2, TRUE);
-            MoveWindow(hRevertButton, rcClient.right - buttonwidth, buttonheight, buttonwidth, STATUSAREAHEIGHT / 2, TRUE);
+
+            //hide open file button
             MoveWindow(hOpenButton, 0, 0, 0, 0, TRUE);
+
+            //show the open folder, and revert button
+            RECT rcopenfolder;
+            if (!SetRect(&rcopenfolder, rcstatusarea.right - buttonwidth, 0, buttonwidth, STATUSAREAHEIGHT / 2)) { }
+            MoveWindow(hOpenFolderButton, rcstatusarea.right - buttonwidth, 0, buttonwidth, STATUSAREAHEIGHT / 2, TRUE);
+            MoveWindow(hRevertButton, rcstatusarea.right - buttonwidth, 50, buttonwidth, STATUSAREAHEIGHT / 2, TRUE);
         }
         else {
+
+            //hide open folder, and revert button
             MoveWindow(hOpenFolderButton, 0, 0, 0, 0, TRUE);
             MoveWindow(hRevertButton, 0, 0, 0, 0, TRUE);
-            MoveWindow(hOpenButton, rcClient.right - buttonwidth, 0, buttonwidth, STATUSAREAHEIGHT, TRUE);
+
+            //show open file button
+            MoveWindow(hOpenButton, rcstatusarea.right - buttonwidth, 0, buttonwidth, STATUSAREAHEIGHT, TRUE);
         }
     }
-    
+
+    //original data window is either hidden or the top half of remaining
     if (OrigDataWindow) {
-
-        int height = (rcClient.bottom - 3 * border - statusAreaHeight - iStatusHeight) / 2;
-
-        int top = border + (statusarea ? STATUSAREAHEIGHT + border : 0); //top
-        int left = border;
-        int right = rcClient.right - border;
-        int bottom = rcClient.bottom - 2 * border - height;
-        
-        
-        MoveWindow(hOriginalDataWindow, top, left, right, bottom, TRUE);
-
-        MoveWindow(hEdit, top + border + height,
-            border,
-            rcClient.right - border,
-            rcClient.bottom - iStatusHeight,
-            TRUE);
-
-
+        RECT rcODW;
+        if (!CopyRect(&rcODW, &remaining_space)) { }
+        rcODW.bottom -= (rcODW.bottom - rcODW.top) / 2;
+        remaining_space.top = rcODW.bottom;
+        MoveWindow(hOriginalDataWindow, rcODW.left, rcODW.top, rcODW.right - rcODW.left, rcODW.bottom - rcODW.top, TRUE);
     }
     else {
-        // Set size of edit window
-        SetWindowPos(hEdit,
-            NULL,
-            border,
-            border + statusAreaHeight,
-            rcClient.right - 2 * border,
-            rcClient.bottom - iStatusHeight - statusAreaHeight - 2 * border,
-            SWP_NOZORDER);
+        MoveWindow(hOriginalDataWindow, 0, 0, 0, 0, TRUE);
     }
 
-  
+    //remaining_space is reduced by border if there is no file
+    if (!fileopen) {
+        remaining_space.bottom -= border;
+        remaining_space.left += border;
+        remaining_space.top += border;
+        remaining_space.right -= border;
+    }
+
+    //edit window takes the remaining space!
+    MoveWindow(hEdit, 
+               remaining_space.left,
+               remaining_space.top,
+               remaining_space.right - remaining_space.left,
+               remaining_space.bottom - remaining_space.top,
+               TRUE);
+
 }
 
-//VOID DrawStatusArea(HWND hwnd, HDC hdc)
-//{
-//    //draw a blue boarder around a white status area
-//    RECT rcClient;
-//    GetClientRect(hwnd, &rcClient);
-//    RECT rcStatusArea = { 0, 0, rcClient.right, STATUSAREAHEIGHT };
-//    FillRect(hdc, &rcStatusArea, CreateSolidBrush(RGB(0, 0, 255)));
-//    int statareaborder = 10;
-//    RECT rcInnerStatusArea = { statareaborder,
-//                               statareaborder,
-//                               rcClient.right -  statareaborder - 150,
-//                               STATUSAREAHEIGHT - statareaborder };
-//    FillRect(hdc, &rcInnerStatusArea, CreateSolidBrush(RGB(255, 255, 255)));
-//
-//
-//    //RECT rc = { 30, 30, 300, 300 };
-//    if (fileopen) {
-//        DrawText(hdc, g_filepath, strlen(g_filepath), &rcInnerStatusArea, DT_LEFT | DT_EDITCONTROL);
-//        rcInnerStatusArea.top += 20;
-//        DrawText(hdc, g_filename, strlen(g_filename), &rcInnerStatusArea, DT_LEFT | DT_EDITCONTROL);
-//
-//
-//    }
-//    else {
-//        DrawText(hdc, "No File Opened", 14, &rcInnerStatusArea, DT_LEFT | DT_EDITCONTROL);
-//
-//    }
-//
-//}
+VOID DrawStatusArea(HWND hwnd, HDC hdc, RECT rc)
+{
+    //blue background
+    FillRect(hdc, &rc, CreateSolidBrush(RGB(0, 0, 255)));
+    int border = 10;
+    int buttonwidth = 150;
+
+    //white main area, constricted by a border and the button width
+    rc.bottom -= border;
+    rc.left += border;
+    rc.top += border;
+    rc.right = rc.right - border - buttonwidth;
+    FillRect(hdc, &rc, CreateSolidBrush(RGB(255, 255, 255)));
+
+    if (fileopen) {
+
+        //top left corner, filepath
+        DrawText(hdc, g_filepath, strlen(g_filepath), &rc, DT_LEFT | DT_EDITCONTROL);
+
+        //20 px down, filename
+        rc.top += 20;
+        DrawText(hdc, g_filename, strlen(g_filename), &rc, DT_LEFT | DT_EDITCONTROL);
+    }
+    else {
+
+        //draw 'no file open'
+        DrawText(hdc, "No File Opened", 14, &rc, DT_LEFT | DT_EDITCONTROL);
+    }
+
+}
 
 VOID Do_WM_PAINT(HWND hwnd)
 {
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hwnd, &ps);
 
-    if (!fileopen)
-    {
-        RECT rcClient;
-        GetClientRect(hwnd, &rcClient);
-        FillRect(hdc, &rcClient, CreateSolidBrush(RGB(255, 0, 0)));
+    RECT rcClient;
+    if (!GetClientRect(hwnd, &rcClient)) { };
+    
+    RECT rcempty; 
+    if (!SetRect(&rcempty, 0, 0, 0, 0)) { };
+    
+
+    //background is red for no file, green with a file
+    FillRect(hdc, &rcClient, CreateSolidBrush((fileopen ? RGB(0, 255, 0) : RGB(255, 0, 0))));
+    
+    //status area
+    RECT rcstatus;
+    if (!CopyRect(&rcstatus, &rcempty)) { }
+    if (statusarea) {
+        if (!CopyRect(&rcstatus, &rcClient)) {}
+        rcstatus.bottom = rcstatus.top + STATUSAREAHEIGHT;
+        DrawStatusArea(hwnd, hdc, rcstatus);
     }
-
-
-    if (statusarea)
-    {
-        RECT rcClient;
-        GetClientRect(hwnd, &rcClient);
-        RECT rcStatusArea = { 0, 0, rcClient.right, STATUSAREAHEIGHT };
-        FillRect(hdc, &rcStatusArea, CreateSolidBrush(RGB(0, 0, 255)));
-        int statareaborder = 10;
-        RECT rcInnerStatusArea = { statareaborder,
-            statareaborder,
-            rcClient.right - statareaborder - 150,
-            STATUSAREAHEIGHT - statareaborder };
-        FillRect(hdc, &rcInnerStatusArea, CreateSolidBrush(RGB(255, 255, 255)));
-
-
-        //RECT rc = { 30, 30, 300, 300 };
-        if (fileopen) {
-            DrawText(hdc, g_filepath, strlen(g_filepath), &rcInnerStatusArea, DT_LEFT | DT_EDITCONTROL);
-            rcInnerStatusArea.top += 20;
-            DrawText(hdc, g_filename, strlen(g_filename), &rcInnerStatusArea, DT_LEFT | DT_EDITCONTROL);
-
-
-        }
-        else {
-            DrawText(hdc, "No File Opened", 14, &rcInnerStatusArea, DT_LEFT | DT_EDITCONTROL);
-
-        }
-    }
+    
 
     EndPaint(hwnd, &ps);
 }
@@ -366,7 +379,12 @@ LRESULT CALLBACK WndProc(HWND hwnd,
         break;
 
     case WM_TIMER:
-        TimerTick(hwnd);
+        if (fileopen) {
+            if (++dirtycount >= DIRTYTHRESHOLD)
+            {
+                SaveOpenedFile(hwnd);
+            }
+        }
         break;
     
     case WM_CLOSE:
@@ -442,6 +460,8 @@ int WINAPI WinMain(HINSTANCE hInstance,
     dirtycount = 0;
     backup = NULL;
     backupsize = 0;
+
+    InitCommonControls();
 
     //Create Window
     HWND hwnd;

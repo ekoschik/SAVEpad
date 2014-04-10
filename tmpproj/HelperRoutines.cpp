@@ -29,16 +29,6 @@ BOOL filedirty;
 
 UINT dirtycount;
 
-VOID TimerTick(HWND hwnd)
-{
-    if (fileopen && dirtycount != 0) {
-        if (++dirtycount >= DIRTYTHRESHOLD)
-        {
-            SaveOpenedFile(hwnd);
-        }
-    }
-}
-
 VOID TimerReset()
 {
     dirtycount = 0;
@@ -74,7 +64,7 @@ VOID MouseScroll(HWND hwnd, WPARAM wParam)
 
 VOID FullRedraw(HWND hwnd)
 {
-    //TODO this is unnecessary, probably
+    //TODO this is unnecessary
 
     RECT rc;
     GetClientRect(hwnd, &rc);
